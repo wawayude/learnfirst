@@ -1,0 +1,571 @@
+#!/bin/bash
+
+DLG="/usr/bin/zenity"			#Linux Installer用到的界面支持程序
+ssr_dir="/opt/SpaceServer"		#Space Server的根目录
+sss_dir="/usr/share/SpaceServer"	#Space Server的安装目录
+lib_dir="/usr/lib/spacews"		#Space Server的本地组件目录
+bin_dir="$sss_dir/bin"			#Space Server需要的插件目录
+cfg_dir="$sss_dir/cfg"			#Space Server配置文件的目录
+dvc_dir="$ssr_dir/drive_c"		#Space Server的虚拟C盘目录
+win_dir="$dvc_dir/windows"		#Space Server的虚拟Windows目录
+tip_dir="$cfg_dir/tips"			#动态生成的运行脚本放置的目录
+log_fil="$ssr_dir/space.log"		#Space Server的日志文件
+LI_DIR="$sss_dir/LinuxInstaller" 	#Linux Installer的配置文件存储目录
+LIST_DIR="$LI_DIR/list"			#Linux软件列表目录
+SOFT_INFO_DIR="$LI_DIR/soft_info_dir/windows_info"	#软件安装信息列表
+ICON_PATH="$sss_dir/xpm/space.xpm"    	#Linux Installer的图标
+tmp_dir=""				#运行本脚本生成的临时文件在此目录中
+usb_dir=""
+
+IsReboot="N"
+
+
+LANG_FILE="$LI_DIR/lang/lang_zh"
+
+NAME="Windows 应用程序管理器"				#Windows Installer的中文名称
+INAME="Windows 安装程序"					#Windows Installer的安装部分的名称
+UNAME="Windows 卸载程序"					#Windows Installer的卸载部分的名称
+
+. $sss_dir/lib/libsi
+
+SpaceWarn()
+{
+	SpaceDlg question "在本系统中安装使用该软件，该软件会不稳定，建议您安装相应功能的Linux软件。是否要继续安装$1？"
+	if [ $ok = 0 ];then
+		return;
+	fi
+	SpaceMainGUI
+	exit 4
+}
+
+#=============================================================================
+#Space Installer在进行Space Server的配置前需要进行一些检测，检测过程如下
+#=============================================================================
+SpaceCheck()
+{
+	if [ ! `which spacews` ]; then
+		SpaceDlg info "没有找到Space Server，安装程序退出！"
+		exit 12
+	fi
+	if [ ! `which spacewsserver` ] && [ ! -e /usr/lib/spacews/spacewsserver ];then
+		SpaceDlg info "Space Server安装有误，安装程序退出！"
+		exit 13
+	fi
+	if [ ! -e $lib_dir ];then
+		SpaceDlg info "警告：无法找到Space Server的一些组件，一些应用程序可能无法运行。"
+		exit 14
+	fi
+}
+
+
+#=============================================================================
+#	建立Space Server的虚拟驱动器文件系统、虚拟串口、虚拟并口
+#=============================================================================
+SpaceCreateDir()
+{
+	for i in \
+	"$HOME/My Documents" \
+	"$HOME/.kde/share/applnk/Windows应用程序/"
+	do	
+	[ -d "$i" ] || mkdir -p "$i"
+	done
+	chmod -R 777 "$HOME/My Documents"
+	chmod a+x $tip_dir/closeartsd.sh
+	rm -rf $HOME/.spacews
+	ln -s $ssr_dir $HOME/.spacews
+	if [ -d "$HOME/桌面" -a ! -d $HOME/Desktop ]; then
+		rm -rf $HOME/Desktop
+		ln -s $HOME/桌面 $HOME/Desktop
+	elif [ -d "$HOME/Desktop" -a ! -d "$HOME/桌面" ]; then
+		rm -rf $HOME/桌面
+		ln -s $HOME/Desktop $HOME/桌面
+	fi
+	rm -rf /root/.spacews
+	ln -s $ssr_dir /root/.spacews
+	rm -rf	"$win_dir/profiles/$MY_NAME/My Documents"
+	rm -rf	"$win_dir/profiles/$MY_NAME/桌面"
+	ln -s $win_dir/fonts/SimSun.TTF $win_dir/fonts/ani.ttf
+	ln -s "$HOME/My Documents" 		"$win_dir/profiles/$MY_NAME/My Documents"
+	ln -s "$HOME/桌面"			"$win_dir/profiles/$MY_NAME/桌面"
+	rm -rf	"$win_dir/profiles/root/My Documents"
+	rm -rf	"$win_dir/profiles/root/Desktop"
+	rm -rf	"$win_dir/profiles/root/桌面"
+	ln -s "$HOME/My Documents" 		"$win_dir/profiles/root/My Documents"
+	ln -s "$HOME/桌面" 			"$win_dir/profiles/root/Desktop"
+	ln -s "$HOME/桌面"			"$win_dir/profiles/root/桌面"
+	cp -f "$cfg_dir/MyDoc.desktop" "$HOME/桌面/"
+	cp -f "$tip_dir/Microsoft Word.desktop" "$HOME/桌面/"
+	cp -f "$tip_dir/Microsoft Word.desktop" "$HOME/.kde/share/applnk/Windows应用程序/"
+	#cp -f "$tip_dir/Microsoft Word.desktop" "$HOME/.kde/share/applnk/Windows应用程序/"
+	cp -f "$tip_dir/Microsoft Excel.desktop" "$HOME/桌面/"
+	cp -f "$tip_dir/Microsoft Excel.desktop" "$HOME/.kde/share/applnk/Windows应用程序/"
+	cp -f "$tip_dir/Microsoft PowerPoint.desktop" "$HOME/桌面/"
+	cp -f "$tip_dir/Microsoft PowerPoint.desktop" "$HOME/.kde/share/applnk/Windows应用程序/"
+
+	cp $tip_dir/扫雷游戏.desktop "$HOME/桌面/"
+	mkdir -p $sss_dir/uninstall
+	chmod 777 -R $sss_dir/uninstall
+
+        spacews shelllink c:\\Program\ Files\\Internet\ Explorer\\IEXPLORE.EXE __startmenu__\\Internet\ Explorer.lnk
+	spacews shelllink c:\\Program\ Files\\Internet\ Explorer\\IEXPLORE.EXE __desktop__\\Internet\ Explorer.lnk
+	rm $HOME/桌面/桌面
+}
+
+SpaceChmod()
+{
+	lndir="$HOME/.kde/share/applnk/Windows应用程序"
+	cp -rf $lndir/Programs/* $lndir
+	while [ "`find $lndir/Programs/ -name '*.desktop'`x" != "x" ]; do
+		rm "`find $lndir/Programs/ -name '*.desktop' | head -n 1`"
+	done
+	find $HOME/.spacews -name "*.lnk" -o -name "*.LNK" -o -name "*.Lnk" | sed 's/ /\\\ /g' | xargs rm
+	chmod 777 -R $ssr_dir
+	chmod 400 "$win_dir/profiles/$MY_NAME/Application Data/Adobe/Photoshop/8.0/Adobe Photoshop CS 设置/Adobe Photoshop CS 预置.psp" 2>/dev/null
+	chmod a+rx -R $sss_dir
+	chmod 777 $tip_dir/*
+	chmod 777 -R "$HOME/My Documents"
+	chmod 777 $HOME/桌面/*.desktop
+	chmod 777 -R $HOME/桌面
+	chmod 777 -R $HOME/Desktop
+	chmod a+rx -R "$HOME/.kde/share/applnk/Windows应用程序/"
+}
+#=============================================================================
+#	从Space Server库中创建到windows虚拟目录的可执行文件链接
+#=============================================================================
+LinkApp()
+{
+	ln -s "$lib_dir/$1.exe.so" "$2" || echo "Warning: failed to create $2"
+}
+
+#=============================================================================
+#	从Space Server库中创建到windows虚拟目录的驱动程序链接
+#=============================================================================
+LinkDrv()
+{
+	ln -s "$lib_dir/$1.drv.so" "$2" || echo "Warning: failed to create $2"
+}
+
+#=============================================================================
+#	从Space Server库中创建到System32虚拟目录的动态链接库链接
+#=============================================================================
+LinkDll()
+{
+	ln -s "$lib_dir/$1.dll.so" "$win_dir/$2/$1.dll" || echo "Warning: failed to create $1"
+}
+
+RegDll()
+{
+	SPACEWSDLLOVERRIDES="regsvr32.exe=b" spacews regsvr32 /i "$1"
+}
+
+#=============================================================================
+#	对Space Server进行初始化配置
+#=============================================================================
+SpaceConfig()
+{	
+(
+	echo "# 正在检查Space Server的资源库..."
+	SpaceCheck
+	CheckUSBDisk
+	if [ "$?" != "0" ]; then
+		exit 23
+	fi
+
+	rm -fr $HOME/.kde/share/applnk/Windows应用程序/*.desktop
+	for i in dev game media net office sys util;do
+		:>$SOFT_INFO_DIR/$i
+	done
+
+	echo "10"; sleep 1; echo "# 正在复制文件，请稍候..."
+
+	CheckUSBDisk
+	cp $usb_dir/windows/name_exe.txt $SOFT_INFO_DIR
+	rm -rf SpaceServer
+	sync
+	echo "20"; sleep 1; echo "# 正在复制文件，请稍候..."
+	sh $usb_dir/space_file_install $usb_dir
+	typeset -i count=$?
+	echo "50"; sleep 1; echo "# 正在复制文件，请稍候..."
+	SpaceCreateDir
+	echo "75"; sleep 1; echo "# 正在复制文件，请稍候 ..."
+	regedit $sss_dir/reg/msofficea.reg
+	cp /etc/scim/config /etc/scim/config.bak
+	sed 's/OnTheSpot = true/OnTheSpot = false/' /etc/scim/config.bak > /etc/scim/config
+	rm -f $HOME/.scim/config
+	rm -f $HOME/.scim/global
+	rm -f /etc/scim/config.bak
+	cp -f /etc/scim/config $HOME/.scim/config
+	cp "$tip_dir/mimeapps.list" $HOME/.local/share/applications/
+
+	echo "90"; sleep 1; echo "# 正在复制文件，请稍候..."
+	SpaceChmod
+	echo "95"; sleep 1; echo "# 正在复制文件，请稍候..."
+	if [ -d $ssr_dir ]; then chown root:root $ssr_dir; fi
+	if [ $count -ne 255 ]; then
+		echo "100"; sleep 1; echo "# Space Server配置完毕！"
+	else
+		echo "100"; sleep 1; echo "# Space Server配置失败！请重新初始化Windows运行环境。"
+	fi
+)|$dlg --title="Space Server配置" --progress --width=400
+	echo "space server" >> $log_fil
+	IsReboot="Y"
+}
+
+SpaceMainGUI()
+{
+	if [ ! -e "$DLG" ]; then
+		echo "`sed -n '7p' $LANG_FILE`"
+		exit
+	elif [ "OK$DISPLAY" = "OK" ]; then
+		echo "`sed -n '8p' $LANG_FILE`"
+		exit
+	fi
+	tmp_dir="$HOME/tmp"
+	
+	[ -d "$tmp_dir" ] || mkdir -p "$tmp_dir"
+	MY_SOFT_LIST="$tmp_dir/my_soft_list"
+
+#lyz added
+	if [ -d $ssr_dir ]; then chown root:root $ssr_dir; fi
+#end
+	$dlg --title="${NAME}" --list --height=270 --width=270  --hide-column=1 --text="您想..." --window-icon="$sss_dir/xpm/space.xpm"	--column="编号" 	--column="选项" \
+	"<01>"	"    安装Windows软件"		"<03>"	"    删除已安装的Windows应用程序"	\
+	"<04>"	"    初始化Windows运行环境"	"<05>"	"    使用注册表管理器"	>$tmp_dir/menu.tmp.$$
+	ret_val=$?
+	
+	case $ret_val in
+	0)
+		if grep "<01>" $tmp_dir/menu.tmp.$$ ; then
+			if [ ! -e $win_dir ];then
+				SpaceDlg info "您还没有配置Space运行环境，现在进行配置"
+				SpaceConfig
+			fi
+			SpaceInstaller
+		fi
+		if grep "<03>" $tmp_dir/menu.tmp.$$ ; then
+			if [ ! -e $win_dir ];then
+				SpaceDlg question "您还没有配置Space运行环境，现在进行配置吗？"
+				if [ $ok = 0 ];then
+					SpaceConfig
+				else
+					SpaceInstaller
+					exit 0;
+				fi
+			fi
+			SpaceUninstaller
+			SpaceMainGUI
+		fi
+		if grep "<04>" $tmp_dir/menu.tmp.$$ ; then
+			if [ -e $win_dir ] ; then
+				SpaceDlg question "本系统对Space运行环境配置完毕，要重新配置吗？"
+				if [ $ok = 0 ];then
+					rm -rf $ssr_dir
+					rm -rf $sss_dir/uninstall
+					SpaceConfig
+				fi
+			else
+				SpaceConfig
+			fi
+			SpaceMainGUI
+		fi
+		if grep "<05>" $tmp_dir/menu.tmp.$$ ; then
+			if [ ! -e $win_dir ];then
+				SpaceDlg question "您还没有配置Space运行环境，现在进行配置吗？"
+				if [ $ok = 0 ];then
+					SpaceConfig
+				else
+					SpaceInstaller
+					exit 0;
+				fi
+			fi
+			`which regedit`
+			spacewsserver -w
+			SpaceMainGUI
+		fi
+		;;
+	1)
+		chown -R $MY_NAME:$MY_NAME  $ssr_dir
+		;;
+	esac
+	rm -f $tmp_dir/menu_top_first.tmp.*
+}
+
+SpaceInstaller()
+{
+	if [ ! -e $dlg ];then
+		echo "没有图形库"
+		exit 1
+	elif [ "OK$DISPLAY" = "OK" ]; then
+		echo "目前不在桌面系统上"
+		exit 2
+	fi
+	
+	CheckUSBDisk
+	SOFTWARE_DIR=$usb_dir/windows
+	tmp_dir="$HOME/tmp"
+	[ -d $tmp_dir ] || mkdir $tmp_dir
+	$DLG --window-icon="$ICON_PATH" --title="$INAME" --list --height=300 --width=400 --hide-column=1 --text="`sed -n '15p' $LANG_FILE`"		\
+		--column="`sed -n '11p' $LANG_FILE`" 		--column="`sed -n '12p' $LANG_FILE`" 		--column="`sed -n '16p' $LANG_FILE`"	\
+		"<01>"		"`sed -n '17p' $LANG_FILE`"	"`sed -n '24p' $LANG_FILE`"					\
+		"<02>"		"`sed -n '18p' $LANG_FILE`"	"`sed -n '25p' $LANG_FILE`"					\
+		"<03>"		"`sed -n '19p' $LANG_FILE`"	"`sed -n '26p' $LANG_FILE`"					\
+		"<04>"		"`sed -n '20p' $LANG_FILE`"	"`sed -n '27p' $LANG_FILE`"					\
+		"<05>"		"`sed -n '21p' $LANG_FILE`"	"`sed -n '28p' $LANG_FILE`"					\
+		"<06>"		"`sed -n '22p' $LANG_FILE`"	"`sed -n '29p' $LANG_FILE`"					\
+		"<07>"		"`sed -n '23p' $LANG_FILE`"	"`sed -n '30p' $LANG_FILE`"					\
+			> $tmp_dir/menu_top_second.tmp.$$ 
+
+	kRET=$?
+	
+	TMP=`wc -w $tmp_dir/menu_top_second.tmp.$$ | cut -f1 -d" "`
+	
+	if [ "$TMP" = "0" -a "$kRET" = "0" ]; then
+		SpaceDlg info "`sed -n '15p' $LANG_FILE`"
+		SpaceInstaller 
+		return
+	fi
+
+	case $kRET in
+	0)
+		if grep "<01>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "net"
+		fi
+
+		if grep "<02>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "office"
+		fi
+
+		if grep "<03>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "media"
+		fi
+
+		if grep "<04>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "dev"
+		fi
+
+		if grep "<05>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "sys"
+		fi
+
+		if grep "<06>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "game"
+		fi
+
+		if grep "<07>" $tmp_dir/menu_top_second.tmp.$$ ; then
+			SubInstaller "util"
+		fi
+		;;
+
+	1)	
+		rm -f $tmp_dir/menu_top_second.tmp.*
+#		umount /media/cdrom0;
+		SpaceMainGUI; return;;
+	255)	
+		rm -f $tmp_dir/menu_top_second.tmp.*
+#		umount /media/cdrom0;
+		SpaceMainGUI; return;;
+	esac
+
+}
+
+#=============================================================================
+#Windows Installer安装程序
+#=============================================================================
+
+SubInstaller()
+{
+	SINED=`ls -l $SOFTWARE_DIR/$1 | grep '^d' | awk '{print $NF".exe"}' | (while read aaa; do find "$dvc_dir" -name  $aaa ;done) | wc -l`
+	SIN=$(echo $(ls -l $SOFTWARE_DIR/$1 | grep '^d' | wc -l)-$SINED | bc)
+	SOFT_LIST=$SOFTWARE_DIR/$1/soft_list
+	:>$MY_SOFT_LIST
+	
+#生成需要安装的软件列表
+	for i in $(ls -l $SOFTWARE_DIR/$1 | grep "^d" | awk '{print $NF".exe"}' );do
+		find "$dvc_dir" -name $i > /tmp/win_soft_tmp
+		if  [ -s /tmp/win_soft_tmp ];then
+			:
+		else
+			grep $i $SOFT_LIST>>$MY_SOFT_LIST
+		fi
+	done
+	
+	if [ -s $MY_SOFT_LIST ];then
+		cat $MY_SOFT_LIST | xargs  $DLG --window-icon="$ICON_PATH" --title="$INAME" --list		\
+		--height=300 --width=400 --hide-column=2 --text="`sed -n '32p' $LANG_FILE`" --checklist --column="" --column="`sed -n '33p' $LANG_FILE`"\
+		--column="`sed -n '34p' $LANG_FILE`" \
+		--column="`sed -n '36p' $LANG_FILE`" > $tmp_dir/menu_sub.tmp.$$
+	else
+		SpaceDlg info "`sed -n '37p' $LANG_FILE`"
+		SpaceInstaller
+		return
+	fi
+
+	nRET=$?
+	
+	mv $tmp_dir/menu_sub.tmp.$$ $tmp_dir/menu_sub.tmp.$$.bak
+	tr -d "\t" < $tmp_dir/menu_sub.tmp.$$.bak > $tmp_dir/menu_sub.tmp.$$
+	rm -f $tmp_dir/menu_sub.tmp.$$.bak
+	
+	case $nRET in
+	0)
+		SOFT_NUM=`sed 's/|/ /g' $tmp_dir/menu_sub.tmp.$$ | wc -w  |cut -f1 -d" "`
+
+		if [ "$SOFT_NUM" = "0" ]; then
+			SpaceDlg info "`sed -n '38p' $LANG_FILE`"
+			SubInstaller "$1"
+			return
+		fi
+		
+		SCROLL=`expr 100 / \( $SOFT_NUM \* 2 \)`
+		I=1
+		PROGRESS="0"
+
+		(echo "$PROGRESS"; echo "`sed -n '39p' $LANG_FILE`"; sleep 1
+
+		while [ $I -le $SOFT_NUM ]
+		do
+			PROGRESS=`expr $PROGRESS + $SCROLL`
+			cat $tmp_dir/menu_sub.tmp.$$
+			TMP_INSTALL_NAME=`awk -F "|" -v INSTALL_NUM="$I" '{print $INSTALL_NUM}' $tmp_dir/menu_sub.tmp.$$`
+			INSTALL_NAME=${TMP_INSTALL_NAME%.exe}
+			echo "$PROGRESS"; echo "`sed -n '40p' $LANG_FILE`""$INSTALL_NAME..."; sleep 1
+			. $SOFTWARE_DIR/$1/$INSTALL_NAME/install
+			${INSTALL_NAME}_install
+			EXT=$?
+			PROGRESS=`expr $PROGRESS + $SCROLL`
+			
+			if [ "$EXT" = "0" ]; then
+				echo "$PROGRESS"; echo "`sed -n '42p' $LANG_FILE`""$INSTALL_NAME..."; sleep 1
+			fi
+
+			I=`expr $I + 1`
+		done
+		
+#		update_soft_info $1
+#		find $(echo $DEST_DIR | sed 's/:/ /g' ) -type f | sort > $ORIG_FILES
+		
+		if [ $PROGRESS -le 100 ]; then
+			echo "100"; echo "`sed -n '43p' $LANG_FILE`"
+		fi) | $DLG --window-icon="$ICON_PATH" --title="$INAME" --progress --width=400 
+		rm -f $tmp_dir/menu_sub.tmp.$$		
+		SubInstaller "$1"
+		;;	
+	123)
+		rm -f $tmp_dir/menu_sub.tmp.$$
+		SpaceInstaller
+		;;
+	255)
+		rm -f $tmp_dir/menu_sub.tmp.$$
+		SpaceInstaller
+		;;
+	esac
+}
+
+SpaceUninstaller()
+{
+	if ls $sss_dir/uninstall/uninstall_* ;then
+		(for files in $(ls $sss_dir/uninstall/uninstall_*) ; do
+			echo "empty"
+			echo "$files"
+			sed -n '2p' $files | cut -d' ' -f2-
+		done) | xargs  $DLG --window-icon="$ICON_PATH" --title="$INAME" --list --height=300 --width=300  --hide-column=2 --text="`sed -n '32p' $LANG_FILE`" --checklist --column="" --column="files" --column="`sed -n '33p' $LANG_FILE`" > $tmp_dir/menu_sub.tmp.$$
+	else
+		SpaceDlg info "`sed -n '45p' $LANG_FILE`"
+		return
+	fi
+
+	[ $? -ne 0 ] && { rm -rf $tmp_dir/menu_sub.tmp.$$; return; }
+	typeset un_softs=$(cat $tmp_dir/menu_sub.tmp.$$ | tr '|' ' ' | wc -w | awk '{print $1;}')
+	typeset -i count=0
+	(echo 0; for i in $(cat $tmp_dir/menu_sub.tmp.$$ | tr '|' ' '); do
+		sh $i && rm -rf $i
+		((count += 1))
+		echo $(((count*100)/$un_softs))
+	done) | $DLG --window-icon="$ICON_PATH" --title="$INAME" --progress --width=300
+	rm -rf $tmp_dir/menu_sub.tmp.$$
+}
+
+SpaceMulitUser()
+{
+	CheckUSBDisk
+	#更改desktop文件的图标，使在不同用户下都能正确显示
+	rm -fr $HOME/.icons
+	cp -R $usb_dir/icons $HOME/.icons
+	chmod -R 777 $HOME/.icons
+	
+	find $HOME/桌面 -maxdepth 1 -name "*.desktop" | sed 's/ /\\\ /g' | xargs sed -i "/Icon=/s#=.*/#=/home/$MY_NAME/.icons/#"
+		
+	path=$HOME/.kde/share/applnk/Windows应用程序
+	#把Windows应用程序都放入一个菜单项中
+	find  $HOME/.local/share/applications/spacews/ -type f -exec mv {} $path \;
+	#cp $HOME/桌面/*.desktop $path
+	rm -fr $path/MyDoc.desktop
+
+	rm -fr  "$HOME/桌面/Internet Explorer.desktop" 
+	rm -fr  "$path/Internet Explorer.desktop"
+
+	if [ -e $path/扫雷*.desktop ]; then
+		mv $path/扫雷*.desktop $$HOME/桌面
+	fi 
+	spacewsboot
+}
+
+#=================================================================================
+#	显示关于对话框
+#=================================================================================
+SpaceAbout()
+{
+	$dlg --title="关于 $NAME" --width=300 --height=200 --info --text="$NAME介绍:
+	$NAME可以在Space Server的基础上方便地帮助您安装应用程序，是Space的一部分，由 北京金杰科技创新研究所（R） 开发。"
+}
+
+WindowsSoftInfoUpdate()
+{
+cd $SOFT_INFO_DIR
+awk -F"@" '{if(system("[ ! -f "$3" ]")){print $2":"$4 > $1}}' $SOFT_INFO_DIR/name_exe.txt
+}
+
+#================================== M A I N ======================================
+clear
+MY_NAME=`users | awk '{ print $1;}'`
+[ "$MY_NAME" = "root" ] || export HOME="/home/$MY_NAME"
+echo $HOME
+rm -f $HOME/桌面/*.lnk
+rm -f $HOME/*.lnk
+if ! dpkg -l spacews | grep "2.17-space-1" > /dev/null ; then
+	SpaceDlg question "您系统上没有安装 spacews 09, 是否安装该软件（安装前请先将您的快速安装软件光盘挂载）？"
+	if [ $ok = 0 ];then
+		CheckUSBDisk
+		if dpkg -i $usb_dir/space-server/spacews.deb ; then
+			SpaceDlg info "spacews 09 已成功安装完成！"
+		else
+			SpaceDlg info "spacews 09 安装失败！"
+			exit 3
+		fi
+	else
+		exit 6
+	fi
+fi
+
+SpaceMainGUI		#运行主程序
+SpaceMulitUser
+WindowsSoftInfoUpdate
+
+
+chown -R $MY_NAME:$MY_NAME  $ssr_dir
+
+if [ -e $win_dir ];then
+	regedit $sss_dir/reg/font_zh_cn.reg
+	cp -f /etc/scim/config $HOME/.scim/config
+	ls / | grep "menu.tmp." && rm /menu.tmp.*
+fi
+
+rm -rf $HOME/tmp > /dev/null 2>&1
+
+if [ "$IsReboot" = "Y" ];then
+	SpaceDlg question "您安装的软件需要重新启动计算机才能使用，是否现在重启计算机 ?"
+	if [ $ok = 0 ];then
+		sudo reboot
+	fi
+fi
+#=================================================================================
